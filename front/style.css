@@ -1,0 +1,163 @@
+/* 기본 여백 초기화 및 폰트 설정 */
+body {
+    font-family: '맑은 고딕', 'Malgun Gothic', sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: #fcfcfc;
+    color: #333;
+}
+
+/* 헤더 영역 */
+header {
+    position: relative;
+    background-color: #ffffff;
+    padding: 20px;
+    border-bottom: 1px solid #eaeaea;
+    text-align: center;
+}
+
+header h1 {
+    margin: 0;
+    font-size: 22px;
+    color: #444;
+}
+
+/* 우측 사이드 네비게이션 (절대 위치로 우측 정렬) */
+.nav-menu {
+    position: absolute;
+    top: 50%;
+    right: 30px;
+    margin-top: -10px; /* 세로 중앙 정렬을 위한 보정 */
+}
+
+.nav-menu a {
+    text-decoration: none;
+    color: #666;
+    margin-left: 20px;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+.nav-menu a:hover {
+    color: #ffb700;
+}
+
+/* 메인 콘텐츠 영역 */
+main {
+    max-width: 900px;
+    margin: 80px auto;
+    padding: 0 20px;
+}
+
+/* 로고와 채팅 로그를 담는 래퍼 */
+.content-wrapper {
+    width: 100%;
+    margin-bottom: 50px;
+}
+
+/* 중앙 기준 살짝 좌측의 로고 영역 (float 사용) */
+.logo-section {
+    float: left;
+    width: 40%; /* 왼쪽 40% 차지 */
+    text-align: right; /* 이미지가 채팅창 쪽(우측)으로 붙도록 설정 */
+    padding-right: 5%;
+    box-sizing: border-box;
+}
+
+.logo-section img {
+    /* 1. 이미지 크기 키우기 */
+    width: 200px; /* 원하는 크기만큼 픽셀(px) 숫자를 늘리거나 줄여보세요 (예: 250px) */
+    max-width: 100%; 
+    height: auto;
+    
+    /* 2. 이미지를 하단으로 내리기 */
+    margin-top: 130px; /* 채팅박스 높이(300px)를 고려해 아래로 쑥 밀어냅니다. 
+                          이미지 크기를 바꿨다면 이 여백 숫자도 조절해서 높낮이를 맞춰주세요. */
+}
+
+
+/* 우측의 채팅 로그 박스 영역 (float 사용) */
+.chat-log-section {
+    float: left;
+    width: 55%; /* 오른쪽 55% 차지 */
+    box-sizing: border-box;
+}
+
+.chat-box {
+    width: 100%;
+    height: 300px;
+    background-color: #ffffff;
+    border: 1px solid #ddd;
+    border-radius: 12px;
+    padding: 20px;
+    box-sizing: border-box;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+    overflow-y: auto;
+
+}
+
+
+.chat-box p {
+    margin: 0 0 10px 0;
+    line-height: 1.5;
+}
+
+/* float 해제를 위한 clearfix */
+.clearfix::after {
+    content: "";
+    display: block;
+    clear: both;
+}
+
+/* 하단 중앙 검색엔진 스타일의 채팅 입력 블럭 */
+.search-input-section {
+    text-align: center;
+    clear: both; /* 위쪽 float 요소들의 영향을 받지 않도록 함 */
+}
+
+.search-input-section input[type="text"] {
+    width: 60%;
+    padding: 16px 24px;
+    font-size: 16px;
+    border: 1px solid #ccc;
+    border-radius: 30px; /* 둥근 검색창 디자인 */
+    box-shadow: 0 4px 6px rgba(0,0,0,0.08);
+    outline: none;
+    transition: border-color 0.3s;
+}
+
+.search-input-section input[type="text"]:focus {
+    border-color: #ffb700;
+}
+
+.search-input-section button {
+    padding: 15px 25px;
+    font-size: 16px;
+    background-color: #333;
+    color: white;
+    border: none;
+    border-radius: 30px;
+    margin-left: 10px;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+.search-input-section button:hover {
+    background-color: #555;
+}
+
+/* 푸터 영역 */
+footer {
+    text-align: center;
+    margin-top: 100px;
+    padding: 20px;
+    border-top: 1px solid #eaeaea;
+}
+
+footer p {
+    margin: 0;
+    font-size: 12px;
+    color: #999;
+    letter-spacing: 1px;
+}
+    
