@@ -8,12 +8,28 @@
 </head>
 <body>
 
+    <!-- 로그인/회원가입 모달 -->
+    <div id="modal-overlay" class="modal-overlay hidden">
+        <div class="modal">
+            <h2 id="modal-title">로그인</h2>
+            <input type="text" id="modal-id" placeholder="아이디">
+            <input type="password" id="modal-pw" placeholder="비밀번호">
+            <p id="modal-message"></p>
+            <div class="modal-buttons">
+                <button id="modal-submit">확인</button>
+                <button id="modal-close">취소</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 헤더 -->
     <header>
         <h1>나만의 비서 cal-bee !</h1>
         <div class="nav-menu">
-            <a href="#">Sign up</a>
-            <a href="#">Sign in</a>
+            <span id="user-status">게스트</span>
+            <a href="#" id="btn-signup">Sign up</a>
+            <a href="#" id="btn-signin">Sign in</a>
+            <a href="#" id="btn-logout" class="hidden">Logout</a>
         </div>
     </header>
 
@@ -25,18 +41,29 @@
                 <img src="/src/calbee-logo2.png">
             </div>
             <div class="chat-log-section">
-                <div class="chat-box">
+                <div class="chat-box" id="chat-box">
                     <p><strong>[시스템]:</strong> cal-bee와 연결되었습니다.</p>
                     <p><strong>cal-bee:</strong> 안녕하세요! 오늘 어떤 도움이 필요하신가요?</p>
-                    <!-- 추후 사용자와의 대화 내용이 스크립트를 통해 이곳에 추가됩니다 -->
                 </div>
             </div>
         </div>
 
-        <!-- 하단 채팅/검색 입력 영역 -->
+        <!-- 일정 관리 영역 (로그인 후 표시) -->
+        <div id="schedule-section" class="hidden">
+            <h3>📅 일정 관리</h3>
+            <div id="schedule-list"></div>
+            <div class="schedule-form">
+                <input type="text" id="scd-title" placeholder="일정 제목">
+                <input type="date" id="scd-date">
+                <input type="text" id="scd-desc" placeholder="메모 (선택)">
+                <button id="btn-add-schedule">등록</button>
+            </div>
+        </div>
+
+        <!-- 하단 채팅 입력 영역 -->
         <div class="search-input-section">
-            <input type="text" placeholder="cal-bee에게 무엇이든 물어보세요..." autocomplete="off">
-            <button type="button">전송</button>
+            <input type="text" id="chat-input" placeholder="cal-bee에게 무엇이든 물어보세요..." autocomplete="off">
+            <button type="button" id="btn-send">전송</button>
         </div>
     </main>
 
@@ -45,5 +72,6 @@
         <p>company hyangchoon</p>
     </footer>
 
+    <script type="module" src="app.js"></script>
 </body>
 </html>
