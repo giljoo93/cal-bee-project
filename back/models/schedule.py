@@ -1,36 +1,38 @@
-from models.db import get_connection
+from models.db import with_db
 from datetime import date
 
-def get_schedules(usercode):
-    conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT * FROM schedule WHERE USER_CODE = %s", (usercode,))
-    rows = cursor.fetchall()
-    conn.close()
-    for row in rows:
-        row['SCD_DATE']   = str(row['SCD_DATE'])
-        row['CREATED_AT'] = str(row['CREATED_AT'])
-        row['UPDATED_AT'] = str(row['UPDATED_AT'])
-    return rows
+def _to_int(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return v
 
-def insert_schedule(usercode, title, scd_date, description):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO schedule "
-        "(USER_CODE, SCD_NO, SCD_TITLE, SCD_DATE, SCD_TIME, DESCRIPTION, CREATED_AT, UPDATED_AT) "
-        "VALUES (%s, null, %s, %s, null, %s, %s, %s)",
-        (usercode, title, scd_date, description, date.today(), date.today())
-    )
-    conn.commit()
-    conn.close()
+@with_db
+def get_schedules(data, usercode):
+    uc = _to_int(usercode)
+    return [dict(s) for s in data['schedule'] if s['USER_CODE'] == uc]
 
-def remove_schedule(scd_no, usercode):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "DELETE FROM schedule WHERE SCD_NO = %s AND USER_CODE = %s",
-        (scd_no, usercode)
-    )
-    conn.commit()
-    conn.close()
+@with_db
+def insert_schedule(data, usercode, title, scd_date, description):
+    scd_no = data['meta']['next_scd_no']
+    data['meta']['next_scd_no'] = scd_no + 1
+    today = str(date.today())
+    data['schedule'].append({
+        "USER_CODE":   _to_int(usercode),
+        "SCD_NO":      scd_no,
+        "SCD_TITLE":   title,
+        "SCD_DATE":    str(scd_date),
+        "SCD_TIME":    None,
+        "DESCRIPTION": description,
+        "CREATED_AT":  today,
+        "UPDATED_AT":  today
+    })
+
+@with_db
+def remove_schedule(data, scd_no, usercode):
+    uc = _to_int(usercode)
+    sn = _to_int(scd_no)
+    data['schedule'] = [
+        s for s in data['schedule']
+        if not (s['SCD_NO'] == sn and s['USER_CODE'] == uc)
+    ]

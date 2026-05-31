@@ -1,25 +1,24 @@
-from models.db import get_connection
+from models.db import with_db
 from datetime import date
 
-def find_user(user_id):
-    conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT * FROM users WHERE USER_ID = %s", (user_id,))
-    result = cursor.fetchone()
-    conn.close()
-    return result
+@with_db
+def find_user(data, user_id):
+    for u in data['users']:
+        if u['USER_ID'] == user_id:
+            return u
+    return None
 
-def create_user(user_id, user_pw):
-    conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT USER_ID FROM users WHERE USER_ID = %s", (user_id,))
-    if cursor.fetchone():
-        conn.close()
+@with_db
+def create_user(data, user_id, user_pw):
+    if any(u['USER_ID'] == user_id for u in data['users']):
         return False
-    cursor.execute(
-        "INSERT INTO users VALUES (NULL, %s, %s, %s, 2)",
-        (user_id, user_pw, date.today())
-    )
-    conn.commit()
-    conn.close()
+    code = data['meta']['next_user_code']
+    data['meta']['next_user_code'] = code + 1
+    data['users'].append({
+        "USER_CODE":  code,
+        "USER_ID":    user_id,
+        "USER_PW":    user_pw,
+        "CREATED_AT": str(date.today()),
+        "USER_GRANT": 2
+    })
     return True

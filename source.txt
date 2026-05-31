@@ -1,0 +1,997 @@
+requirements.txt
+flask
+ollama
+
+
+back/server.py
+from flask import Flask, send_from_directory
+from controllers.auth import auth_bp
+from controllers.schedule import schedule_bp
+from controllers.chat import chat_bp
+
+app = Flask(__name__)
+
+# Blueprint 등록
+app.register_blueprint(auth_bp)
+app.register_blueprint(schedule_bp)
+app.register_blueprint(chat_bp)
+
+# 프론트엔드 서빙
+@app.route('/')
+def index():
+    return send_from_directory('../front', 'index.html')
+
+@app.route('/src/<path:filename>')
+def src_files(filename):
+    return send_from_directory('../src', filename)
+
+@app.route('/<path:filename>')
+def static_files(filename):
+    return send_from_directory('../front', filename)
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
+
+
+back/controllers/__init__.py
+# 관례상 두었습니다.
+# import 해서 사용하는 python 패키지입니다.
+
+
+back/controllers/auth.py
+from flask import Blueprint, request, jsonify
+from models import user as UserModel
+
+auth_bp = Blueprint('auth', __name__)
+
+@auth_bp.post('/api/login')
+def login():
+    data   = request.json
+    result = UserModel.find_user(data['id'])
+
+    if result is None:
+        return jsonify({"success": False, "message": "존재하지 않는 아이디입니다."})
+    elif result['USER_PW'] == data['pw']:
+        return jsonify({"success": True, "usercode": result['USER_CODE'], "grant": result['USER_GRANT']})
+    else:
+        return jsonify({"success": False, "message": "비밀번호가 틀렸습니다."})
+
+@auth_bp.post('/api/signup')
+def signup():
+    data    = request.json
+    success = UserModel.create_user(data['id'], data['pw'])
+
+    if success:
+        return jsonify({"success": True, "message": "계정이 생성되었습니다."})
+    else:
+        return jsonify({"success": False, "message": "중복되는 아이디가 존재합니다."})
+
+
+back/controllers/chat.py
+import json
+from datetime import date
+from flask import Blueprint, request, jsonify
+from models import ai as AIModel
+from models import schedule as ScheduleModel
+
+chat_bp = Blueprint('chat', __name__)
+
+SYSTEM_TEMPLATE = """너는 'cal-bee'라는 한국어 일정 관리 비서다.
+사용자의 메시지를 보고 의도를 분류해 **JSON 한 개**로만 응답한다. 다른 텍스트는 절대 출력하지 않는다.
+
+오늘 날짜: {today}
+
+사용자의 현재 일정 목록:
+{schedules}
+
+응답 스키마:
+{{
+  "action": "add" | "delete" | "list" | "chat",
+  "title": "일정 제목 (action=add 일 때 필수)",
+  "date": "YYYY-MM-DD (action=add 일 때 필수)",
+  "description": "상세 설명 (선택)",
+  "scd_no": 정수 (action=delete 일 때 필수, 위 목록의 SCD_NO 사용),
+  "reply": "사용자에게 보여줄 한국어 답변 (항상 필수)"
+}}
+
+규칙:
+- 새 일정을 추가/등록/잡아달라는 요청이면 action=add. 날짜가 모호하면("내일", "다음주 금요일") 오늘 날짜 기준으로 정확한 YYYY-MM-DD로 변환.
+- 특정 일정을 삭제/취소/지워달라는 요청이면 action=delete. 위 목록에서 가장 일치하는 SCD_NO를 골라라.
+- 일정을 보여달라/뭐 있냐 같은 조회 요청이면 action=list.
+- 위 어느 것도 아니면(잡담, 질문 등) action=chat.
+- 정보가 부족해서 add/delete 를 못 하면 action=chat 으로 무엇이 부족한지 reply 에 한국어로 묻는다.
+- reply 는 자연스러운 한국어 한두 문장으로."""
+
+
+def _build_system_prompt(schedules):
+    if not schedules:
+        sched_text = "(없음)"
+    else:
+        lines = [
+            f"- SCD_NO={s['SCD_NO']}, 제목='{s['SCD_TITLE']}', 날짜={s['SCD_DATE']}, 설명='{s.get('DESCRIPTION', '')}'"
+            for s in schedules
+        ]
+        sched_text = "\n".join(lines)
+    return SYSTEM_TEMPLATE.format(today=date.today().isoformat(), schedules=sched_text)
+
+
+def _safe_parse(raw):
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        start = raw.find('{')
+        end   = raw.rfind('}')
+        if start != -1 and end != -1 and end > start:
+            try:
+                return json.loads(raw[start:end + 1])
+            except json.JSONDecodeError:
+                return None
+        return None
+
+
+@chat_bp.post('/api/chat')
+def chat():
+    body     = request.json or {}
+    question = (body.get('question') or '').strip()
+    usercode = body.get('usercode')
+
+    if not question:
+        return jsonify({"reply": "메시지를 입력해 주세요.", "refresh": False})
+
+    if not usercode:
+        return jsonify({"reply": "로그인이 필요합니다.", "refresh": False})
+
+    schedules = ScheduleModel.get_schedules(usercode)
+    system    = _build_system_prompt(schedules)
+
+    raw    = AIModel.chat_json(system, question)
+    parsed = _safe_parse(raw)
+
+    if not parsed:
+        return jsonify({"reply": "죄송해요, 이해하지 못했어요. 다시 말씀해 주세요.", "refresh": False})
+
+    action = parsed.get('action', 'chat')
+    reply  = parsed.get('reply') or '처리했어요.'
+
+    if action == 'add':
+        title    = parsed.get('title')
+        scd_date = parsed.get('date')
+        desc     = parsed.get('description', '') or ''
+        if not title or not scd_date:
+            return jsonify({"reply": "일정 제목과 날짜를 알려 주세요.", "refresh": False})
+        ScheduleModel.insert_schedule(usercode, title, scd_date, desc)
+        return jsonify({"reply": reply, "refresh": True})
+
+    if action == 'delete':
+        scd_no = parsed.get('scd_no')
+        if scd_no is None:
+            return jsonify({"reply": "어떤 일정을 삭제할지 알려 주세요.", "refresh": False})
+        ScheduleModel.remove_schedule(scd_no, usercode)
+        return jsonify({"reply": reply, "refresh": True})
+
+    return jsonify({"reply": reply, "refresh": False})
+
+
+back/controllers/schedule.py
+from flask import Blueprint, request, jsonify
+from models import schedule as ScheduleModel
+
+schedule_bp = Blueprint('schedule', __name__)
+
+@schedule_bp.get('/api/schedules')
+def get_schedules():
+    usercode = request.args.get('usercode')
+    data     = ScheduleModel.get_schedules(usercode)
+    return jsonify(data)
+
+@schedule_bp.post('/api/schedules')
+def add_schedule():
+    data = request.json
+    ScheduleModel.insert_schedule(
+        data['usercode'],
+        data['title'],
+        data['date'],
+        data.get('description', '')
+    )
+    return jsonify({"success": True, "message": "일정이 추가되었습니다."})
+
+@schedule_bp.delete('/api/schedules/<int:scd_no>')
+def delete_schedule(scd_no):
+    usercode = request.args.get('usercode')
+    ScheduleModel.remove_schedule(scd_no, usercode)
+    return jsonify({"success": True, "message": "일정이 삭제되었습니다."})
+
+
+back/models/__init__.py
+(빈 파일 — 관례상 두었습니다. import 해서 사용하는 python 패키지입니다.)
+
+
+back/models/ai.py
+import ollama
+
+MODEL = 'gemma2:9b'
+
+def chat_json(system_prompt, user_message):
+    res = ollama.chat(
+        model=MODEL,
+        messages=[
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user',   'content': user_message}
+        ],
+        format='json'
+    )
+    return res['message']['content']
+
+
+back/models/db.py
+import json
+import os
+from threading import Lock
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(BASE_DIR, 'data')
+DB_PATH  = os.path.join(DATA_DIR, 'calbee.json')
+
+_lock = Lock()
+
+_DEFAULT = {
+    "meta": {"next_user_code": 1, "next_scd_no": 1},
+    "users": [],
+    "schedule": []
+}
+
+def _ensure_file():
+    if not os.path.exists(DATA_DIR):
+        os.makedirs(DATA_DIR, exist_ok=True)
+    if not os.path.exists(DB_PATH):
+        with open(DB_PATH, 'w', encoding='utf-8') as f:
+            json.dump(_DEFAULT, f, ensure_ascii=False, indent=2)
+
+def load_db():
+    _ensure_file()
+    with open(DB_PATH, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def save_db(data):
+    _ensure_file()
+    tmp = DB_PATH + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, DB_PATH)
+
+def with_db(fn):
+    def wrapper(*args, **kwargs):
+        with _lock:
+            data = load_db()
+            result = fn(data, *args, **kwargs)
+            save_db(data)
+            return result
+    return wrapper
+
+
+back/models/schedule.py
+from models.db import with_db
+from datetime import date
+
+def _to_int(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return v
+
+@with_db
+def get_schedules(data, usercode):
+    uc = _to_int(usercode)
+    return [dict(s) for s in data['schedule'] if s['USER_CODE'] == uc]
+
+@with_db
+def insert_schedule(data, usercode, title, scd_date, description):
+    scd_no = data['meta']['next_scd_no']
+    data['meta']['next_scd_no'] = scd_no + 1
+    today = str(date.today())
+    data['schedule'].append({
+        "USER_CODE":   _to_int(usercode),
+        "SCD_NO":      scd_no,
+        "SCD_TITLE":   title,
+        "SCD_DATE":    str(scd_date),
+        "SCD_TIME":    None,
+        "DESCRIPTION": description,
+        "CREATED_AT":  today,
+        "UPDATED_AT":  today
+    })
+
+@with_db
+def remove_schedule(data, scd_no, usercode):
+    uc = _to_int(usercode)
+    sn = _to_int(scd_no)
+    data['schedule'] = [
+        s for s in data['schedule']
+        if not (s['SCD_NO'] == sn and s['USER_CODE'] == uc)
+    ]
+
+
+back/models/user.py
+from models.db import with_db
+from datetime import date
+
+@with_db
+def find_user(data, user_id):
+    for u in data['users']:
+        if u['USER_ID'] == user_id:
+            return u
+    return None
+
+@with_db
+def create_user(data, user_id, user_pw):
+    if any(u['USER_ID'] == user_id for u in data['users']):
+        return False
+    code = data['meta']['next_user_code']
+    data['meta']['next_user_code'] = code + 1
+    data['users'].append({
+        "USER_CODE":  code,
+        "USER_ID":    user_id,
+        "USER_PW":    user_pw,
+        "CREATED_AT": str(date.today()),
+        "USER_GRANT": 2
+    })
+    return True
+
+
+front/index.html
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>나만의 비서 cal-bee</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- 로그인/회원가입 모달 -->
+    <div id="modal-overlay" class="modal-overlay hidden">
+        <div class="modal">
+            <h2 id="modal-title">로그인</h2>
+            <input type="text" id="modal-id" placeholder="아이디">
+            <input type="password" id="modal-pw" placeholder="비밀번호">
+            <p id="modal-message"></p>
+            <div class="modal-buttons">
+                <button id="modal-submit">확인</button>
+                <button id="modal-close">취소</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 헤더 -->
+    <header>
+        <h1>나만의 비서 cal-bee !</h1>
+        <div class="nav-menu">
+            <span id="user-status">게스트</span>
+            <a href="#" id="btn-signup">Sign up</a>
+            <a href="#" id="btn-signin">Sign in</a>
+            <a href="#" id="btn-logout" class="hidden">Logout</a>
+        </div>
+    </header>
+
+    <!-- 메인 -->
+    <main>
+        <!-- 로고와 대화 로그 영역 -->
+        <div class="content-wrapper clearfix">
+            <div class="logo-section">
+                <img src="/src/calbee-logo2.png">
+            </div>
+            <div class="chat-log-section">
+                <div class="chat-box" id="chat-box">
+                    <p><strong>[시스템]:</strong> cal-bee와 연결되었습니다.</p>
+                    <p><strong>cal-bee:</strong> 안녕하세요! 오늘 어떤 도움이 필요하신가요?</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 일정 관리 영역 (로그인 후 표시) -->
+        <div id="schedule-section" class="hidden">
+            <h3>📅 일정 관리</h3>
+            <div id="schedule-list"></div>
+            <div class="schedule-form">
+                <input type="text" id="scd-title" placeholder="일정 제목">
+                <input type="date" id="scd-date">
+                <input type="text" id="scd-desc" placeholder="메모 (선택)">
+                <button id="btn-add-schedule">등록</button>
+            </div>
+        </div>
+
+        <!-- 하단 채팅 입력 영역 -->
+        <div class="search-input-section">
+            <input type="text" id="chat-input" placeholder="cal-bee에게 무엇이든 물어보세요..." autocomplete="off">
+            <button type="button" id="btn-send">전송</button>
+        </div>
+    </main>
+
+    <!-- 푸터 -->
+    <footer>
+        <p>company hyangchoon</p>
+    </footer>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>
+
+
+front/style.css
+/* 기본 여백 초기화 및 폰트 설정 */
+body {
+    font-family: '맑은 고딕', 'Malgun Gothic', sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: #fcfcfc;
+    color: #333;
+}
+
+/* 헤더 영역 */
+header {
+    position: relative;
+    background-color: #ffffff;
+    padding: 20px;
+    border-bottom: 1px solid #eaeaea;
+    text-align: center;
+}
+
+header h1 {
+    margin: 0;
+    font-size: 22px;
+    color: #444;
+}
+
+/* 우측 사이드 네비게이션 (절대 위치로 우측 정렬) */
+.nav-menu {
+    position: absolute;
+    top: 50%;
+    right: 30px;
+    margin-top: -10px; /* 세로 중앙 정렬을 위한 보정 */
+}
+
+.nav-menu a {
+    text-decoration: none;
+    color: #666;
+    margin-left: 20px;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+.nav-menu a:hover {
+    color: #ffb700;
+}
+
+/* 메인 콘텐츠 영역 */
+main {
+    max-width: 900px;
+    margin: 80px auto;
+    padding: 0 20px;
+}
+
+/* 로고와 채팅 로그를 담는 래퍼 */
+.content-wrapper {
+    width: 100%;
+    margin-bottom: 50px;
+}
+
+/* 중앙 기준 살짝 좌측의 로고 영역 (float 사용) */
+.logo-section {
+    float: left;
+    width: 40%; /* 왼쪽 40% 차지 */
+    text-align: right; /* 이미지가 채팅창 쪽(우측)으로 붙도록 설정 */
+    padding-right: 5%;
+    box-sizing: border-box;
+}
+
+.logo-section img {
+    /* 1. 이미지 크기 키우기 */
+    width: 200px;
+    max-width: 100%;
+    height: auto;
+
+    /* 2. 이미지를 하단으로 내리기 */
+    margin-top: 130px;
+}
+
+
+/* 우측의 채팅 로그 박스 영역 (float 사용) */
+.chat-log-section {
+    float: left;
+    width: 55%; /* 오른쪽 55% 차지 */
+    box-sizing: border-box;
+}
+
+.chat-box {
+    width: 100%;
+    height: 300px;
+    background-color: #ffffff;
+    border: 1px solid #ddd;
+    border-radius: 12px;
+    padding: 20px;
+    box-sizing: border-box;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+    overflow-y: auto;
+}
+
+
+.chat-box p {
+    margin: 0 0 10px 0;
+    line-height: 1.5;
+}
+
+/* float 해제를 위한 clearfix */
+.clearfix::after {
+    content: "";
+    display: block;
+    clear: both;
+}
+
+/* 하단 중앙 검색엔진 스타일의 채팅 입력 블럭 */
+.search-input-section {
+    text-align: center;
+    clear: both;
+}
+
+.search-input-section input[type="text"] {
+    width: 60%;
+    padding: 16px 24px;
+    font-size: 16px;
+    border: 1px solid #ccc;
+    border-radius: 30px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.08);
+    outline: none;
+    transition: border-color 0.3s;
+}
+
+.search-input-section input[type="text"]:focus {
+    border-color: #ffb700;
+}
+
+.search-input-section button {
+    padding: 15px 25px;
+    font-size: 16px;
+    background-color: #333;
+    color: white;
+    border: none;
+    border-radius: 30px;
+    margin-left: 10px;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+.search-input-section button:hover {
+    background-color: #555;
+}
+
+/* 푸터 영역 */
+footer {
+    text-align: center;
+    margin-top: 100px;
+    padding: 20px;
+    border-top: 1px solid #eaeaea;
+}
+
+footer p {
+    margin: 0;
+    font-size: 12px;
+    color: #999;
+    letter-spacing: 1px;
+}
+
+/* 숨김 처리 */
+.hidden {
+    display: none !important;
+}
+
+/* 헤더 유저 상태 */
+#user-status {
+    font-size: 13px;
+    color: #ffb700;
+    font-weight: bold;
+    margin-right: 10px;
+}
+
+/* 모달 오버레이 */
+.modal-overlay {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+/* 모달 박스 */
+.modal {
+    background: #fff;
+    border-radius: 12px;
+    padding: 40px;
+    width: 320px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.modal h2 {
+    margin: 0 0 8px 0;
+    font-size: 20px;
+    color: #333;
+}
+
+.modal input {
+    padding: 12px 16px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    font-size: 14px;
+    outline: none;
+}
+
+.modal input:focus {
+    border-color: #ffb700;
+}
+
+.modal-buttons {
+    display: flex;
+    gap: 10px;
+}
+
+.modal-buttons button {
+    flex: 1;
+    padding: 12px;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+#modal-submit {
+    background-color: #333;
+    color: white;
+}
+
+#modal-submit:hover {
+    background-color: #555;
+}
+
+#modal-close {
+    background-color: #eee;
+    color: #555;
+}
+
+#modal-close:hover {
+    background-color: #ddd;
+}
+
+#modal-message {
+    font-size: 13px;
+    margin: 0;
+    min-height: 18px;
+}
+
+/* 일정 관리 영역 */
+#schedule-section {
+    max-width: 900px;
+    margin: 0 auto 40px auto;
+    padding: 0 20px;
+}
+
+#schedule-section h3 {
+    font-size: 16px;
+    color: #444;
+    margin-bottom: 12px;
+}
+
+.schedule-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 16px;
+    background: #fff;
+    border: 1px solid #eee;
+    border-radius: 8px;
+    margin-bottom: 8px;
+    font-size: 14px;
+}
+
+.schedule-item button {
+    padding: 4px 12px;
+    background-color: #ff6b6b;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.schedule-item button:hover {
+    background-color: #e05555;
+}
+
+.schedule-form {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+}
+
+.schedule-form input {
+    padding: 10px 14px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    font-size: 14px;
+    outline: none;
+    flex: 1;
+    min-width: 120px;
+}
+
+.schedule-form input:focus {
+    border-color: #ffb700;
+}
+
+.schedule-form button {
+    padding: 10px 20px;
+    background-color: #333;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.schedule-form button:hover {
+    background-color: #555;
+}
+
+.no-schedule {
+    font-size: 14px;
+    color: #aaa;
+    padding: 10px 0;
+}
+
+
+front/api.js
+// ── 인증 ──────────────────────────────────────────────
+export async function login(id, pw) {
+    const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, pw })
+    });
+    return res.json();
+}
+
+export async function signup(id, pw) {
+    const res = await fetch('/api/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, pw })
+    });
+    return res.json();
+}
+
+// ── 일정 ──────────────────────────────────────────────
+export async function fetchSchedules(usercode) {
+    const res = await fetch(`/api/schedules?usercode=${usercode}`);
+    return res.json();
+}
+
+export async function addSchedule(usercode, title, date, description) {
+    const res = await fetch('/api/schedules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ usercode, title, date, description })
+    });
+    return res.json();
+}
+
+export async function deleteSchedule(scdNo, usercode) {
+    const res = await fetch(`/api/schedules/${scdNo}?usercode=${usercode}`, {
+        method: 'DELETE'
+    });
+    return res.json();
+}
+
+// ── AI 채팅 ───────────────────────────────────────────
+export async function sendChat(usercode, question) {
+    const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ usercode, question })
+    });
+    return res.json();
+}
+
+
+front/app.js
+import * as API from './api.js';
+import * as UI  from './ui.js';
+
+// ── 상태 ──────────────────────────────────────────────
+const state = {
+    usercode:   localStorage.getItem('usercode') || null,
+    grant:      localStorage.getItem('grant')    || null,
+    userId:     localStorage.getItem('userId')   || null,
+    isLoggedIn: !!localStorage.getItem('usercode')
+};
+
+// ── 일정 불러오기 ─────────────────────────────────────
+async function loadSchedules() {
+    const data = await API.fetchSchedules(state.usercode);
+    UI.renderSchedules(data, async (scdNo) => {
+        await API.deleteSchedule(scdNo, state.usercode);
+        loadSchedules();
+    });
+}
+
+// ── 로그아웃 ──────────────────────────────────────────
+function logout() {
+    Object.assign(state, { usercode: null, grant: null, userId: null, isLoggedIn: false });
+    localStorage.clear();
+    UI.showLoggedOut();
+    UI.addMessage('[시스템]', '로그아웃 되었습니다.');
+}
+
+// ── 모달 제출 (로그인 / 회원가입) ────────────────────
+async function handleModalSubmit() {
+    const id   = document.getElementById('modal-id').value.trim();
+    const pw   = document.getElementById('modal-pw').value.trim();
+    const mode = document.getElementById('modal-submit').dataset.mode;
+
+    if (!id || !pw) {
+        UI.setModalMessage('아이디와 비밀번호를 입력하세요.', false);
+        return;
+    }
+
+    const result = mode === 'signin' ? await API.login(id, pw) : await API.signup(id, pw);
+
+    if (result.success) {
+        if (mode === 'signin') {
+            Object.assign(state, {
+                usercode: result.usercode,
+                grant:    result.grant,
+                userId:   id,
+                isLoggedIn: true
+            });
+            localStorage.setItem('usercode', result.usercode);
+            localStorage.setItem('grant',    result.grant);
+            localStorage.setItem('userId',   id);
+            UI.closeModal();
+            UI.showLoggedIn(id);
+            loadSchedules();
+            UI.addMessage('[시스템]', `${id}님 환영합니다!`);
+        } else {
+            UI.setModalMessage(result.message + ' 이제 로그인하세요.', true);
+        }
+    } else {
+        UI.setModalMessage(result.message, false);
+    }
+}
+
+// ── 일정 등록 ─────────────────────────────────────────
+async function handleAddSchedule() {
+    const title       = document.getElementById('scd-title').value.trim();
+    const date        = document.getElementById('scd-date').value;
+    const description = document.getElementById('scd-desc').value.trim();
+
+    if (!title || !date) { alert('제목과 날짜를 입력하세요.'); return; }
+
+    await API.addSchedule(state.usercode, title, date, description);
+    document.getElementById('scd-title').value = '';
+    document.getElementById('scd-date').value  = '';
+    document.getElementById('scd-desc').value  = '';
+    loadSchedules();
+}
+
+// ── AI 채팅 전송 ──────────────────────────────────────
+async function sendMessage() {
+    const input    = document.getElementById('chat-input');
+    const question = input.value.trim();
+    if (!question) return;
+
+    UI.addMessage('나', question);
+    input.value = '';
+
+    const chatBox = document.getElementById('chat-box');
+    const aiP     = UI.addMessage('cal-bee 🐝', '...');
+
+    const result = await API.sendChat(state.usercode, question);
+    aiP.innerHTML     = result.reply || '';
+    chatBox.scrollTop = chatBox.scrollHeight;
+
+    if (result.refresh && state.isLoggedIn) {
+        loadSchedules();
+    }
+}
+
+// ── 이벤트 바인딩 ─────────────────────────────────────
+document.getElementById('btn-signin').addEventListener('click', (e) => { e.preventDefault(); UI.openModal('signin'); });
+document.getElementById('btn-signup').addEventListener('click', (e) => { e.preventDefault(); UI.openModal('signup'); });
+document.getElementById('btn-logout').addEventListener('click', (e) => { e.preventDefault(); logout(); });
+document.getElementById('modal-close').addEventListener('click', UI.closeModal);
+document.getElementById('modal-submit').addEventListener('click', handleModalSubmit);
+document.getElementById('btn-send').addEventListener('click', sendMessage);
+document.getElementById('btn-add-schedule').addEventListener('click', handleAddSchedule);
+document.getElementById('chat-input').addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMessage(); });
+
+// ── 초기화 ────────────────────────────────────────────
+if (state.isLoggedIn) {
+    UI.showLoggedIn(state.userId);
+    loadSchedules();
+}
+
+
+front/ui.js
+// ── 채팅 ──────────────────────────────────────────────
+export function addMessage(sender, text) {
+    const chatBox = document.getElementById('chat-box');
+    const p       = document.createElement('p');
+    p.innerHTML   = `<strong>${sender}:</strong> ${text}`;
+    chatBox.appendChild(p);
+    chatBox.scrollTop = chatBox.scrollHeight;
+    return p;
+}
+
+// ── 로그인/로그아웃 상태 ──────────────────────────────
+export function showLoggedIn(userId) {
+    document.getElementById('user-status').textContent = `${userId} 님`;
+    document.getElementById('btn-signin').classList.add('hidden');
+    document.getElementById('btn-signup').classList.add('hidden');
+    document.getElementById('btn-logout').classList.remove('hidden');
+    document.getElementById('schedule-section').classList.remove('hidden');
+}
+
+export function showLoggedOut() {
+    document.getElementById('user-status').textContent = '게스트';
+    document.getElementById('btn-signin').classList.remove('hidden');
+    document.getElementById('btn-signup').classList.remove('hidden');
+    document.getElementById('btn-logout').classList.add('hidden');
+    document.getElementById('schedule-section').classList.add('hidden');
+}
+
+// ── 일정 목록 렌더링 ──────────────────────────────────
+export function renderSchedules(data, onDelete) {
+    const list  = document.getElementById('schedule-list');
+    list.innerHTML = '';
+
+    if (data.length === 0) {
+        list.innerHTML = '<p class="no-schedule">등록된 일정이 없습니다.</p>';
+        return;
+    }
+
+    data.forEach(row => {
+        const div       = document.createElement('div');
+        div.className   = 'schedule-item';
+        div.innerHTML   = `
+            <span>${row.SCD_DATE} &nbsp;|&nbsp; <strong>${row.SCD_TITLE}</strong> &nbsp;|&nbsp; ${row.DESCRIPTION || '내용없음'}</span>
+            <button data-id="${row.SCD_NO}">삭제</button>
+        `;
+        div.querySelector('button').addEventListener('click', () => onDelete(row.SCD_NO));
+        list.appendChild(div);
+    });
+}
+
+// ── 모달 ──────────────────────────────────────────────
+export function openModal(mode) {
+    document.getElementById('modal-title').textContent      = mode === 'signin' ? '로그인' : '회원가입';
+    document.getElementById('modal-submit').dataset.mode    = mode;
+    document.getElementById('modal-id').value               = '';
+    document.getElementById('modal-pw').value               = '';
+    document.getElementById('modal-message').textContent    = '';
+    document.getElementById('modal-overlay').classList.remove('hidden');
+}
+
+export function closeModal() {
+    document.getElementById('modal-overlay').classList.add('hidden');
+}
+
+export function setModalMessage(message, isSuccess) {
+    const el    = document.getElementById('modal-message');
+    el.textContent  = message;
+    el.style.color  = isSuccess ? 'green' : 'red';
+}

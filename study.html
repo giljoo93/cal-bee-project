@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>cal-bee 학습 자료</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+    line-height: 1.7;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 40px 24px 120px;
+    color: #1f2328;
+    background: #fafbfc;
+  }
+  h1 { font-size: 2em; border-bottom: 2px solid #d0d7de; padding-bottom: 8px; }
+  h2 { font-size: 1.5em; margin-top: 2.2em; border-bottom: 1px solid #d0d7de; padding-bottom: 6px; color: #0969da; }
+  h3 { font-size: 1.2em; margin-top: 1.8em; color: #1f2328; }
+  h4 { margin-top: 1.4em; color: #57606a; }
+  p, li { font-size: 15px; }
+  code {
+    background: #eaeef2;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: "Consolas", "D2Coding", monospace;
+    font-size: 13.5px;
+  }
+  pre {
+    background: #0d1117;
+    color: #e6edf3;
+    padding: 16px 20px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  pre code { background: none; color: inherit; padding: 0; font-size: 13px; }
+  .toc {
+    background: #fff;
+    border: 1px solid #d0d7de;
+    border-radius: 8px;
+    padding: 16px 24px;
+    margin: 24px 0;
+  }
+  .toc ol { padding-left: 22px; }
+  .note {
+    border-left: 4px solid #0969da;
+    background: #ddf4ff;
+    padding: 12px 16px;
+    border-radius: 4px;
+    margin: 14px 0;
+  }
+  .warn {
+    border-left: 4px solid #d4a72c;
+    background: #fff8c5;
+    padding: 12px 16px;
+    border-radius: 4px;
+    margin: 14px 0;
+  }
+  .tree {
+    background: #f6f8fa;
+    border: 1px solid #d0d7de;
+    padding: 16px;
+    border-radius: 6px;
+    font-family: "Consolas", monospace;
+    font-size: 13px;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; }
+  th, td { border: 1px solid #d0d7de; padding: 8px 12px; text-align: left; }
+  th { background: #f6f8fa; }
+  .label { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; margin-right: 4px; }
+  .py  { background: #ffd43b; color: #333; }
+  .js  { background: #f7df1e; color: #333; }
+  .html{ background: #e34c26; color: #fff; }
+  .arrow { color: #0969da; font-weight: bold; }
+</style>
+</head>
+<body>
+
+<h1>🐝 cal-bee 프로젝트 학습 자료</h1>
+<p>Flask + Ollama(gemma2:9b) + JSON 파일 기반 일정 관리 서비스의 코드 구조와 동작 흐름을 정리한 문서입니다.</p>
+
+<div class="toc">
+<strong>목차</strong>
+<ol>
+  <li><a href="#overview">전체 아키텍처</a></li>
+  <li><a href="#tree">디렉터리 구조</a></li>
+  <li><a href="#server">server.py — Flask 엔트리포인트</a></li>
+  <li><a href="#db">models/db.py — JSON 저장소</a></li>
+  <li><a href="#user">models/user.py — 사용자 모델</a></li>
+  <li><a href="#schedule-model">models/schedule.py — 일정 모델</a></li>
+  <li><a href="#ai">models/ai.py — Ollama 호출</a></li>
+  <li><a href="#auth">controllers/auth.py — 인증 라우트</a></li>
+  <li><a href="#schedule-ctrl">controllers/schedule.py — 일정 라우트</a></li>
+  <li><a href="#chat">controllers/chat.py — LLM 툴 콜링</a></li>
+  <li><a href="#frontend">프론트엔드 핵심 (api.js / app.js)</a></li>
+  <li><a href="#flow">데이터 흐름 시나리오</a></li>
+  <li><a href="#concepts">핵심 개념 정리</a></li>
+</ol>
+</div>
+
+<!-- ─────────────────────────────────────────────── -->
+<h2 id="overview">1. 전체 아키텍처</h2>
+<p>3개의 계층으로 구성됩니다.</p>
+<pre><code>[브라우저: front/*.html, *.js]
+        │  fetch (JSON)
+        ▼
+[Flask 서버: back/server.py + controllers/*]
+        │                     │
+        │ JSON 파일 R/W       │ ollama.chat()
+        ▼                     ▼
+[back/data/calbee.json]   [Ollama: gemma2:9b]</code></pre>
+
+<ul>
+  <li><strong>Flask</strong>: 라우팅·정적 파일 서빙 (포트 5000)</li>
+  <li><strong>JSON 파일</strong>: MySQL 대체. 단일 파일에 users/schedule 저장.</li>
+  <li><strong>Ollama</strong>: 로컬 LLM. 채팅 메시지를 받아 <em>JSON 명령</em>으로 변환.</li>
+</ul>
+
+<!-- ─────────────────────────────────────────────── -->
+<h2 id="tree">2. 디렉터리 구조</h2>
+<div class="tree">cal-bee-project/
+├── requirements.txt          # flask, ollama
+├── .gitignore
+├── back/
+│   ├── server.py             # Flask 엔트리포인트
+│   ├── controllers/
+│   │   ├── auth.py           # /api/login, /api/signup
+│   │   ├── schedule.py       # /api/schedules
+│   │   └── chat.py           # /api/chat (LLM 툴 콜링)
+│   ├── models/
+│   │   ├── db.py             # JSON 파일 R/W + 락
+│   │   ├── user.py           # 사용자 CRUD
+│   │   ├── schedule.py       # 일정 CRUD
+│   │   └── ai.py             # Ollama 래퍼
+│   └── data/calbee.json      # ← 런타임에 자동 생성
+├── front/
+│   ├── index.html
+│   ├── style.css
+│   ├── api.js                # fetch 래퍼
+│   ├── app.js                # 상태 관리 + 이벤트
+│   └── ui.js                 # DOM 조작
+└── src/                      # 로고 이미지</div>
+
+<!-- ─────────────────────────────────────────────── -->
+<h2 id="server">3. <span class="label py">PY</span> back/server.py</h2>
+<p>Flask 앱을 만들고, 각 컨트롤러(Blueprint)를 등록하고, 프론트 파일을 정적 서빙합니다.</p>
+<pre><code>from flask import Flask, send_from_directory
+from controllers.auth import auth_bp
+from controllers.schedule import schedule_bp
+from controllers.chat import chat_bp
+
+app = Flask(__name__)
+
+# Blueprint 등록 — 라우트들을 모듈별로 분리
+app.register_blueprint(auth_bp)
+app.register_blueprint(schedule_bp)
+app.register_blueprint(chat_bp)
+
+# 프론트엔드 서빙
+@app.route('/')
+def index():
+    return send_from_directory('../front', 'index.html')
+
+@app.route('/src/&lt;path:filename&gt;')
+def src_files(filename):
+    return send_from_directory('../src', filename)
+
+@app.route('/&lt;path:filename&gt;')
+def static_files(filename):
+    return send_from_directory('../front', filename)
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)</code></pre>
+
+<h4>학습 포인트</h4>
+<ul>
+  <li><code>Blueprint</code>: Flask에서 라우트들을 모듈로 묶어 관리하는 객체. <code>auth_bp</code> 내부에서 정의된 <code>/api/login</code> 등이 등록 시점에 앱에 연결됨.</li>
+  <li><code>send_from_directory</code>: 보안상 안전하게 파일을 응답으로 내보내는 헬퍼 (디렉터리 트래버설 방지).</li>
+  <li><code>debug=True</code>: 코드 수정 시 자동 재시작. 배포에선 끄는 게 일반적.</li>
+</ul>
+
+<!-- ─────────────────────────────────────────────── -->
+<h2 id="db">4. <span class="label py">PY</span> back/models/db.py — JSON 저장소</h2>
+<p>MySQL 대신 단일 JSON 파일을 DB처럼 사용합니다. 동시성 보호와 원자적 저장이 핵심입니다.</p>
+<pre><code>import json
+import os
+from threading import Lock
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(BASE_DIR, 'data')
+DB_PATH  = os.path.join(DATA_DIR, 'calbee.json')
+
+_lock = Lock()  # 동시 요청이 같은 파일을 망가뜨리지 않도록
+
+_DEFAULT = {
+    "meta": {"next_user_code": 1, "next_scd_no": 1},
+    "users": [],
+    "schedule": []
+}
+
+def _ensure_file():
+    if not os.path.exists(DATA_DIR):
+        os.makedirs(DATA_DIR, exist_ok=True)
+    if not os.path.exists(DB_PATH):
+        with open(DB_PATH, 'w', encoding='utf-8') as f:
+            json.dump(_DEFAULT, f, ensure_ascii=False, indent=2)
+
+def load_db():
+    _ensure_file()
+    with open(DB_PATH, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def save_db(data):
+    _ensure_file()
+    tmp = DB_PATH + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, DB_PATH)  # 원자적 교체 — 쓰다가 중단돼도 본 파일 안전
+
+def with_db(fn):
+    """데코레이터: load → 함수 실행 → save 를 자동 처리."""
+    def wrapper(*args, **kwargs):
+        with _lock:
+            data = load_db()
+            result = fn(data, *args, **kwargs)
+            save_db(data)
+            return result
+    return wrapper</code></pre>
+
+<h4>학습 포인트</h4>
+<ul>
+  <li><strong>Lock</strong>: Flask는 기본적으로 여러 요청을 동시에 처리할 수 있음. 두 요청이 같은 시점에 파일을 쓰면 깨질 수 있으므로 <code>with _lock:</code>으로 한 번에 하나씩만 진입.</li>
+  <li><strong>원자적 저장</strong>: <code>tmp</code> 파일에 먼저 쓴 뒤 <code>os.replace</code>로 갈아끼우면, 쓰는 도중 정전/오류가 나도 기존 파일이 손상되지 않음.</li>
+  <li><strong>데코레이터</strong>: <code>@with_db</code>를 붙이면 함수의 첫 인자로 <code>data</code>가 자동으로 들어오고, 함수가 끝나면 자동으로 저장됨. 반복 코드 제거.</li>
+  <li><code>ensure_ascii=False</code>: 한글이 <code>\uXXXX</code>로 인코딩되지 않고 그대로 저장되어 읽기 편함.</li>
+</ul>
+
+<!-- ─────────────────────────────────────────────── -->
+<h2 id="user">5. <span class="label py">PY</span> back/models/user.py</h2>
+<pre><code>from models.db import with_db
+from datetime import date
+
+@with_db
+def find_user(data, user_id):
+    for u in data['users']:
+        if u['USER_ID'] == user_id:
+            return u
+    return None
+
+@with_db
+def create_user(data, user_id, user_pw):
+    if any(u['USER_ID'] == user_id for u in data['users']):
+        return False  # 중복 ID
+    code = data['meta']['next_user_code']
+    data['meta']['next_user_code'] = code + 1   # auto-increment 흉내
+    data['users'].append({
+        "USER_CODE":  code,
+        "USER_ID":    user_id,
+        "USER_PW":    user_pw,
+        "CREATED_AT": str(date.today()),
+        "USER_GRANT": 2
+    })
+    return True</code></pre>
+
+<h4>학습 포인트</h4>
+<ul>
+  <li><code>@with_db</code> 덕분에 함수 안에서는 <strong>순수 파이썬 리스트 조작</strong>만 하면 됨. 파일 입출력은 데코레이터가 처리.</li>
+  <li><code>meta.next_user_code</code>: SQL의 AUTO_INCREMENT를 흉내낸 카운터.</li>
+</ul>
+
+<!-- ─────────────────────────────────────────────── -->
+<h2 id="schedule-model">6. <span class="label py">PY</span> back/models/schedule.py</h2>
+<pre><code>from models.db import with_db
+from datetime import date
+
+def _to_int(v):
+    try: return int(v)
+    except (TypeError, ValueError): return v
+
+@with_db
+def get_schedules(data, usercode):
+    uc = _to_int(usercode)
+    return [dict(s) for s in data['schedule'] if s['USER_CODE'] == uc]
+
+@with_db
+def insert_schedule(data, usercode, title, scd_date, description):
+    scd_no = data['meta']['next_scd_no']
+    data['meta']['next_scd_no'] = scd_no + 1
+    today = str(date.today())
+    data['schedule'].append({
+        "USER_CODE":   _to_int(usercode),
+        "SCD_NO":      scd_no,
+        "SCD_TITLE":   title,
+        "SCD_DATE":    str(scd_date),
+        "SCD_TIME":    None,
+        "DESCRIPTION": description,
+        "CREATED_AT":  today,
+        "UPDATED_AT":  today
+    })
+
+@with_db
+def remove_schedule(data, scd_no, usercode):
+    uc = _to_int(usercode); sn = _to_int(scd_no)
+    data['schedule'] = [
+        s for s in data['schedule']
+        if not (s['SCD_NO'] == sn and s['USER_CODE'] == uc)
+    ]</code></pre>
+
+<h4>학습 포인트</h4>
+<ul>
+  <li><strong>왜 <code>_to_int</code>?</strong> 프론트의 쿼리스트링(<code>?usercode=3</code>)은 문자열로 들어옴. JSON에 저장된 값은 정수. 비교가 깨지지 않도록 통일.</li>
+  <li><code>dict(s)</code>로 복사본 반환: 외부에서 결과를 수정해도 원본 JSON에 영향이 가지 않게.</li>
+  <li>삭제는 <strong>리스트 컴프리헨션</strong>으로 조건에 맞는 항목만 빼고 새 리스트로 교체.</li>
+</ul>
+
+<!-- ─────────────────────────────────────────────── -->
+<h2 id="ai">7. <span class="label py">PY</span> back/models/ai.py — Ollama 호출</h2>
+<pre><code>import ollama
+
+MODEL = 'gemma2:9b'
+
+def chat_json(system_prompt, user_message):
+    res = ollama.chat(
+        model=MODEL,
+        messages=[
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user',   'content': user_message}
+        ],
+        format='json'   # ← 응답을 반드시 JSON 형식으로 강제
+    )
+    return res['message']['content']</code></pre>
+
+<h4>학습 포인트</h4>
+<ul>
+  <li><strong>system 메시지</strong>: 모델의 역할/규칙을 지정. <strong>user 메시지</strong>: 사용자의 실제 입력.</li>
+  <li><code>format='json'</code>: Ollama의 강력한 기능. 모델이 잡담을 섞지 않고 JSON 객체만 반환하도록 디코더를 제약.</li>
+  <li>스트리밍을 끈 이유: 응답을 파싱해서 액션을 실행해야 하므로 전체가 다 와야 함.</li>
+</ul>
+
+<!-- ─────────────────────────────────────────────── -->
+<h2 id="auth">8. <span class="label py">PY</span> back/controllers/auth.py</h2>
+<pre><code>from flask import Blueprint, request, jsonify
+from models import user as UserModel
+
+auth_bp = Blueprint('auth', __name__)
+
+@auth_bp.post('/api/login')
+def login():
+    data   = request.json
+    result = UserModel.find_user(data['id'])
+
+    if result is None:
+        return jsonify({"success": False, "message": "존재하지 않는 아이디입니다."})
+    elif result['USER_PW'] == data['pw']:
+        return jsonify({"success": True, "usercode": result['USER_CODE'], "grant": result['USER_GRANT']})
+    else:
+        return jsonify({"success": False, "message": "비밀번호가 틀렸습니다."})
+
+@auth_bp.post('/api/signup')
+def signup():
+    data    = request.json
+    success = UserModel.create_user(data['id'], data['pw'])
+    if success:
+        return jsonify({"success": True, "message": "계정이 생성되었습니다."})
+    else:
+        return jsonify({"success": False, "message": "중복되는 아이디가 존재합니다."})</code></pre>
+
+<div class="warn">
+<strong>실무 주의:</strong> 비밀번호를 평문으로 비교하고 있습니다. 실제 서비스라면 <code>bcrypt</code> 같은 해시 함수로 저장해야 합니다. 학습용 과제 수준이라 단순화한 상태입니다.
+</div>
+
+<!-- ─────────────────────────────────────────────── -->
+<h2 id="schedule-ctrl">9. <span class="label py">PY</span> back/controllers/schedule.py</h2>
+<pre><code>from flask import Blueprint, request, jsonify
+from models import schedule as ScheduleModel
+
+schedule_bp = Blueprint('schedule', __name__)
+
+@schedule_bp.get('/api/schedules')
+def get_schedules():
+    usercode = request.args.get('usercode')   # 쿼리스트링
+    return jsonify(ScheduleModel.get_schedules(usercode))
+
+@schedule_bp.post('/api/schedules')
+def add_schedule():
+    data = request.json
+    ScheduleModel.insert_schedule(
+        data['usercode'], data['title'],
+        data['date'], data.get('description', '')
+    )
+    return jsonify({"success": True, "message": "일정이 추가되었습니다."})
+
+@schedule_bp.delete('/api/schedules/&lt;int:scd_no&gt;')
+def delete_schedule(scd_no):
+    usercode = request.args.get('usercode')
+    ScheduleModel.remove_schedule(scd_no, usercode)
+    return jsonify({"success": True, "message": "일정이 삭제되었습니다."})</code></pre>
+
+<h4>학습 포인트</h4>
+<ul>
+  <li><strong>HTTP 메서드별 데코레이터</strong>: <code>@bp.get</code>, <code>@bp.post</code>, <code>@bp.delete</code> — RESTful 스타일.</li>
+  <li><code>&lt;int:scd_no&gt;</code>: URL 경로의 일부를 정수로 받아 함수 인자로 전달.</li>
+  <li><code>request.args</code>(쿼리스트링) vs <code>request.json</code>(body) 차이.</li>
+</ul>
+
+<!-- ─────────────────────────────────────────────── -->
+<h2 id="chat">10. <span class="label py">PY</span> back/controllers/chat.py — LLM 툴 콜링 ⭐</h2>
+<p>이 프로젝트의 핵심. 자연어 메시지를 받아서 LLM에게 <strong>JSON 명령</strong>으로 변환시키고, 그 명령에 따라 일정 모델을 실제로 호출합니다.</p>
+
+<pre><code>import json
+from datetime import date
+from flask import Blueprint, request, jsonify
+from models import ai as AIModel
+from models import schedule as ScheduleModel
+
+chat_bp = Blueprint('chat', __name__)
+
+SYSTEM_TEMPLATE = """너는 'cal-bee'라는 한국어 일정 관리 비서다.
+사용자의 메시지를 보고 의도를 분류해 **JSON 한 개**로만 응답한다.
+
+오늘 날짜: {today}
+
+사용자의 현재 일정 목록:
+{schedules}
+
+응답 스키마:
+{{
+  "action": "add" | "delete" | "list" | "chat",
+  "title": "...",
+  "date": "YYYY-MM-DD",
+  "description": "...",
+  "scd_no": 정수,
+  "reply": "한국어 답변 (항상 필수)"
+}}
+..."""</code></pre>
+
+<p>시스템 프롬프트에 <strong>오늘 날짜</strong>와 <strong>현재 일정 목록</strong>을 포함하는 것이 핵심입니다. 모델이 "내일", "치과 일정"같은 표현을 정확한 날짜·SCD_NO로 변환할 수 있게 됩니다.</p>
+
+<pre><code>def _build_system_prompt(schedules):
+    if not schedules:
+        sched_text = "(없음)"
+    else:
+        lines = [
+            f"- SCD_NO={s['SCD_NO']}, 제목='{s['SCD_TITLE']}', "
+            f"날짜={s['SCD_DATE']}, 설명='{s.get('DESCRIPTION', '')}'"
+            for s in schedules
+        ]
+        sched_text = "\n".join(lines)
+    return SYSTEM_TEMPLATE.format(today=date.today().isoformat(), schedules=sched_text)
+
+
+def _safe_parse(raw):
+    """모델이 JSON을 약간 어겼을 때를 위한 폴백 파서."""
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        start = raw.find('{'); end = raw.rfind('}')
+        if start != -1 and end &gt; start:
+            try: return json.loads(raw[start:end + 1])
+            except json.JSONDecodeError: return None
+        return None
+
+
+@chat_bp.post('/api/chat')
+def chat():
+    body     = request.json or {}
+    question = (body.get('question') or '').strip()
+    usercode = body.get('usercode')
+
+    if not question:
+        return jsonify({"reply": "메시지를 입력해 주세요.", "refresh": False})
+    if not usercode:
+        return jsonify({"reply": "로그인이 필요합니다.", "refresh": False})
+
+    # 1) 현재 일정을 컨텍스트로 모델에게 전달
+    schedules = ScheduleModel.get_schedules(usercode)
+    system    = _build_system_prompt(schedules)
+
+    # 2) LLM 호출 → JSON 응답
+    raw    = AIModel.chat_json(system, question)
+    parsed = _safe_parse(raw)
+    if not parsed:
+        return jsonify({"reply": "죄송해요, 이해하지 못했어요.", "refresh": False})
+
+    action = parsed.get('action', 'chat')
+    reply  = parsed.get('reply') or '처리했어요.'
+
+    # 3) 액션 분기 — 실제 일정 모델을 호출
+    if action == 'add':
+        title    = parsed.get('title')
+        scd_date = parsed.get('date')
+        desc     = parsed.get('description', '') or ''
+        if not title or not scd_date:
+            return jsonify({"reply": "일정 제목과 날짜를 알려 주세요.", "refresh": False})
+        ScheduleModel.insert_schedule(usercode, title, scd_date, desc)
+        return jsonify({"reply": reply, "refresh": True})
+
+    if action == 'delete':
+        scd_no = parsed.get('scd_no')
+        if scd_no is None:
+            return jsonify({"reply": "어떤 일정을 삭제할지 알려 주세요.", "refresh": False})
+        ScheduleModel.remove_schedule(scd_no, usercode)
+        return jsonify({"reply": reply, "refresh": True})
+
+    return jsonify({"reply": reply, "refresh": False})</code></pre>
+
+<div class="note">
+<strong>이 기법의 이름:</strong> "Tool calling" 또는 "Function calling"입니다. 큰 회사의 LLM API(OpenAI, Anthropic 등)는 전용 기능으로 제공하지만, 로컬 모델인 gemma2에선 <strong>프롬프트로 강제 + JSON 모드</strong>로 직접 구현한 것입니다.
+</div>
+
+<h4>학습 포인트</h4>
+<ul>
+  <li>모델은 <em>판단</em>만 하고, <em>실행</em>은 파이썬이 한다 — 안전한 패턴.</li>
+  <li>일정 목록을 매번 프롬프트에 넣는 것은 비효율적이지만, 데이터가 적은 학습용에선 충분.</li>
+  <li><code>refresh: True</code>를 응답에 넣어 프론트가 일정 목록을 다시 불러오게 트리거.</li>
+</ul>
+
+<!-- ─────────────────────────────────────────────── -->
+<h2 id="frontend">11. <span class="label js">JS</span> 프론트엔드 핵심</h2>
+
+<h3>api.js — fetch 래퍼</h3>
+<pre><code>export async function sendChat(usercode, question) {
+    const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ usercode, question })
+    });
+    return res.json();
+}</code></pre>
+
+<h3>app.js — 채팅 전송 부분</h3>
+<pre><code>async function sendMessage() {
+    const input    = document.getElementById('chat-input');
+    const question = input.value.trim();
+    if (!question) return;
+
+    UI.addMessage('나', question);
+    input.value = '';
+
+    const aiP = UI.addMessage('cal-bee 🐝', '...');     // 로딩 표시
+    const result = await API.sendChat(state.usercode, question);
+    aiP.innerHTML = result.reply || '';
+
+    if (result.refresh &amp;&amp; state.isLoggedIn) {
+        loadSchedules();                                 // 목록 갱신
+    }
+}</code></pre>
+
+<h4>학습 포인트</h4>
+<ul>
+  <li><code>async/await</code>: 비동기 코드를 동기처럼 작성. <code>fetch</code>가 응답을 받을 때까지 기다림.</li>
+  <li><code>state</code> 객체 + <code>localStorage</code>: 로그인 상태를 브라우저에 영속화.</li>
+  <li>UI 갱신은 <code>ui.js</code>에 분리 — 관심사 분리 (separation of concerns).</li>
+</ul>
+
+<!-- ─────────────────────────────────────────────── -->
+<h2 id="flow">12. 데이터 흐름 시나리오</h2>
+
+<h3>시나리오 A: "내일 동아리 회의 잡아줘"</h3>
+<ol>
+  <li>브라우저 <code>app.js</code>: <code>sendChat(usercode, "내일 동아리 회의 잡아줘")</code> 호출</li>
+  <li>POST <code>/api/chat</code> → <code>chat.py</code> 진입</li>
+  <li><code>ScheduleModel.get_schedules(usercode)</code> — 현재 일정 조회</li>
+  <li>시스템 프롬프트 구성 (오늘 날짜 + 일정 목록 + 스키마)</li>
+  <li><code>ollama.chat(format='json')</code> 호출 → 모델이 <code>{"action":"add","title":"동아리 회의","date":"2026-05-31","reply":"내일 동아리 회의 일정을 추가했어요."}</code> 반환</li>
+  <li><code>action=="add"</code> → <code>insert_schedule(...)</code> → JSON 파일에 추가</li>
+  <li>응답: <code>{"reply":"...추가했어요", "refresh":true}</code></li>
+  <li>프론트: 메시지 표시 + <code>loadSchedules()</code>로 일정 패널 갱신</li>
+</ol>
+
+<h3>시나리오 B: "치과 일정 지워줘"</h3>
+<ol>
+  <li>POST <code>/api/chat</code></li>
+  <li>현재 일정 목록 안에 <em>SCD_NO=5, 제목='치과 예약'</em>이 있다면 모델이 <code>{"action":"delete","scd_no":5,"reply":"치과 일정을 삭제했어요."}</code> 반환</li>
+  <li><code>remove_schedule(5, usercode)</code> 호출</li>
+  <li>응답에 <code>refresh:true</code> → 일정 목록 새로고침</li>
+</ol>
+
+<!-- ─────────────────────────────────────────────── -->
+<h2 id="concepts">13. 핵심 개념 정리</h2>
+
+<table>
+<tr><th>개념</th><th>설명</th><th>이 프로젝트에서</th></tr>
+<tr><td>Blueprint</td><td>Flask에서 라우트를 모듈로 묶는 객체</td><td>auth_bp, schedule_bp, chat_bp</td></tr>
+<tr><td>데코레이터</td><td>함수를 감싸 부가 동작 추가</td><td><code>@with_db</code> — load/save 자동화</td></tr>
+<tr><td>스레드 락</td><td>동시 접근으로 인한 데이터 손상 방지</td><td><code>_lock</code>이 JSON 파일 쓰기 직렬화</td></tr>
+<tr><td>원자적 쓰기</td><td>tmp 파일 → rename으로 중단 시에도 안전</td><td><code>os.replace(tmp, DB_PATH)</code></td></tr>
+<tr><td>시스템 프롬프트</td><td>모델의 역할/규칙을 지정하는 메시지</td><td>SYSTEM_TEMPLATE</td></tr>
+<tr><td>JSON 모드</td><td>모델이 JSON만 출력하도록 디코더 제약</td><td><code>format='json'</code></td></tr>
+<tr><td>툴 콜링</td><td>LLM이 함수 호출을 결정, 코드가 실행</td><td>action 분기 → ScheduleModel 호출</td></tr>
+<tr><td>관심사 분리</td><td>역할별 파일/모듈 분리</td><td>controllers / models / front 분리</td></tr>
+</table>
+
+<div class="note">
+<strong>실행 방법 복습</strong>
+<pre><code>pip install -r requirements.txt
+ollama pull gemma2:9b
+python back/server.py
+# 브라우저에서 http://localhost:5000</code></pre>
+</div>
+
+<p style="text-align:center; margin-top:60px; color:#57606a;">🐝 Happy learning!</p>
+
+</body>
+</html>

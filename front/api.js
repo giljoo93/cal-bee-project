@@ -40,18 +40,11 @@ export async function deleteSchedule(scdNo, usercode) {
 }
 
 // ── AI 채팅 ───────────────────────────────────────────
-export async function streamChat(question, onChunk) {
+export async function sendChat(usercode, question) {
     const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question })
+        body: JSON.stringify({ usercode, question })
     });
-    const reader  = res.body.getReader();
-    const decoder = new TextDecoder();
-
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        onChunk(decoder.decode(value));
-    }
+    return res.json();
 }

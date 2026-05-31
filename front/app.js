@@ -87,12 +87,15 @@ async function sendMessage() {
     input.value = '';
 
     const chatBox = document.getElementById('chat-box');
-    const aiP     = UI.addMessage('cal-bee 🐝', '');
+    const aiP     = UI.addMessage('cal-bee 🐝', '...');
 
-    await API.streamChat(question, (chunk) => {
-        aiP.innerHTML    += chunk;
-        chatBox.scrollTop = chatBox.scrollHeight;
-    });
+    const result = await API.sendChat(state.usercode, question);
+    aiP.innerHTML     = result.reply || '';
+    chatBox.scrollTop = chatBox.scrollHeight;
+
+    if (result.refresh && state.isLoggedIn) {
+        loadSchedules();
+    }
 }
 
 // ── 이벤트 바인딩 ─────────────────────────────────────

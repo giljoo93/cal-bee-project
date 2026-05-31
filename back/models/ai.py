@@ -1,8 +1,14 @@
 import ollama
 
-def get_stream(question):
-    return ollama.chat(
-        model='gemma2',
-        messages=[{'role': 'user', 'content': question}],
-        stream=True
+MODEL = 'gemma2:9b'
+
+def chat_json(system_prompt, user_message):
+    res = ollama.chat(
+        model=MODEL,
+        messages=[
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user',   'content': user_message}
+        ],
+        format='json'
     )
+    return res['message']['content']

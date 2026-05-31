@@ -14,3 +14,6 @@ env/
 # OS 파일
 .DS_Store
 Thumbs.db
+
+# 런타임 데이터 (JSON DB)
+back/data/
